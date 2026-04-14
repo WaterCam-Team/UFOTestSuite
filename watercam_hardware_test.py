@@ -466,22 +466,28 @@ def test_lepton(verbose: bool):
         import smbus2
 
         bus = smbus2.SMBus(1)
-        time.sleep(0.5)  # Lepton boot
+        time.sleep(0.5)  # minimum settle before first CCI poll
 
-        # Read STATUS register (0x0002); bits[1:0] should be 0b00 (busy=0, boot=done)
+        # Read STATUS register (0x0002); bits[1:0] should be 0b10 (boot=1, busy=0).
+        # The Lepton 3.5 can take up to ~950 ms from RESET_L deassertion to assert
+        # boot=1.  Poll up to 1.5 s in 50 ms increments so we don't false-fail on
+        # a slow but healthy boot.
         try:
-            raw = bus.read_i2c_block_data(LEPTON_I2C_ADDR, 0, 2)
-            # The CCI register address is written first, then data read
-            # Use write_byte_data to set register pointer then read_i2c_block_data
-            # Actually Lepton CCI uses 16-bit register addressing:
-            msg_w = smbus2.i2c_msg.write(LEPTON_I2C_ADDR,
-                                         [(LEPTON_REG_STATUS >> 8) & 0xFF,
-                                          LEPTON_REG_STATUS & 0xFF])
-            msg_r = smbus2.i2c_msg.read(LEPTON_I2C_ADDR, 2)
-            bus.i2c_rdwr(msg_w, msg_r)
-            status = (list(msg_r)[0] << 8) | list(msg_r)[1]
+            status = 0
+            boot_mode = 0
+            deadline = time.monotonic() + 1.5
+            while time.monotonic() < deadline:
+                msg_w = smbus2.i2c_msg.write(LEPTON_I2C_ADDR,
+                                             [(LEPTON_REG_STATUS >> 8) & 0xFF,
+                                              LEPTON_REG_STATUS & 0xFF])
+                msg_r = smbus2.i2c_msg.read(LEPTON_I2C_ADDR, 2)
+                bus.i2c_rdwr(msg_w, msg_r)
+                status = (list(msg_r)[0] << 8) | list(msg_r)[1]
+                boot_mode = (status >> 1) & 0x0001   # 1 = normal, 0 = booting
+                if boot_mode == 1:
+                    break
+                time.sleep(0.05)
             busy = bool(status & 0x0001)
-            boot_mode = (status >> 1) & 0x0001   # 1 = normal, 0 = booting
             error_code = (status >> 8) & 0xFF
             record("lepton", "CCI I2C communication (0x2A)", True,
                    f"status=0x{status:04X} busy={busy} boot={boot_mode} err={error_code}")
