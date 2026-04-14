@@ -1,0 +1,28 @@
+# WaterCam Hardware Test Suite – Python dependencies
+# Target: Raspberry Pi 4B, Raspberry Pi OS (Bookworm/Trixie), Python >= 3.11
+#
+# Install:
+#   pip install -r requirements.txt
+#
+# Note: picamera2 and RPi.GPIO are best installed via apt on Raspberry Pi OS:
+#   sudo apt install python3-picamera2 python3-rpi.gpio
+
+# GPIO
+RPi.GPIO>=0.7.1
+
+# Adafruit Blinka (hardware abstraction layer for board/busio)
+adafruit-blinka>=8.0.0
+
+# Sensor drivers
+adafruit-circuitpython-ahtx0>=1.0.6
+adafruit-circuitpython-bno055>=3.3.7
+
+# I2C / SPI raw access
+smbus2>=0.4.3
+spidev>=3.6
+
+# Serial (mDot LoRa UART)
+pyserial>=3.5
+
+# Camera (prefer apt package; pip fallback for non-Pi environments)
+# picamera2>=0.3.12

@@ -27,16 +27,16 @@ GPIO allocation (BCM numbering, from PCB design):
   GPIO22      - IR-CUT filter A (PCB v6 design)
 
 I2C address map (no conflicts):
+  0x08        - WittyPi 4 MCU (unified virtual address; LM75B and RTC
+                are on its internal bus, not directly on Pi I2C-1)
   0x28 / 0x29 - BNO055 IMU
   0x38        - AHT20 temp/humidity
-  0x48        - WittyPi LM75B temperature sensor
   0x50        - HAT EEPROM (if fitted)
-  0x51        - WittyPi PCF85063A RTC
   0x2A        - FLIR Lepton CCI
 
 Serial: mDot on /dev/ttyAMA5 (UART5, 115200 8N1)
 SPI:    Lepton VOSPI on /dev/spidev0.0, mode 3, 16 MHz max
-Camera: CSI ribbon to Pi, controlled via libcamera / picamera2
+Camera: CSI ribbon to Pi, controlled via rpicam / picamera2
 """
 
 import sys
@@ -163,15 +163,15 @@ def test_system(verbose: bool):
         exists = os.path.exists(dev)
         record("system", f"device {dev}", exists)
 
-    # Camera interface (libcamera)
+    # Camera interface (rpicam)
     try:
-        r = subprocess.run(["libcamera-hello", "--list-cameras"],
+        r = subprocess.run(["rpicam-hello", "--list-cameras"],
                            capture_output=True, text=True, timeout=10)
         found = "Available cameras" in r.stdout or "0 :" in r.stdout
-        record("system", "libcamera detects cameras", found,
+        record("system", "rpicam detects cameras", found,
                r.stdout.strip().splitlines()[0] if r.stdout.strip() else r.stderr.strip()[:80])
     except FileNotFoundError:
-        record("system", "libcamera present", False, "libcamera-hello not installed")
+        record("system", "rpicam-hello present", False, "rpicam-hello not installed")
 
 
 # ---------------------------------------------------------------------------
@@ -179,13 +179,14 @@ def test_system(verbose: bool):
 # ---------------------------------------------------------------------------
 
 EXPECTED_I2C_ADDRESSES = {
+    0x08: "WittyPi 4 MCU (unified virtual address)",
     0x28: "BNO055 IMU (default addr)",
     0x38: "AHT20 temp/humidity",
-    0x48: "WittyPi LM75B temperature",
-    0x51: "WittyPi PCF85063A RTC",
     0x2A: "FLIR Lepton CCI",
 }
 # 0x29 is alternative BNO055 address; 0x50 is optional HAT EEPROM
+# WittyPi 4's LM75B (0x48) and PCF85063A RTC (0x51) are on its internal
+# I2C bus and are not directly visible on the Pi's I2C-1 bus.
 OPTIONAL_I2C_ADDRESSES = {0x29, 0x50}
 
 
@@ -254,7 +255,7 @@ def test_wittypi(verbose: bool):
         except Exception as e:
             return None
 
-    # Temperature (WittyPi's on-board LM75B, I2C 0x48)
+    # Temperature (read via WittyPi utilities; sensor is on its internal bus)
     raw = run_wittypi("get_temperature")
     if raw and raw != "ERROR":
         try:
@@ -647,19 +648,19 @@ IRCUT_GPIO_BCM = 21   # BCM GPIO21 = physical pin 40 (current software assignmen
 def test_ircut(verbose: bool):
     section("IR-CUT Camera")
 
-    # Camera detection via libcamera
+    # Camera detection via rpicam
     try:
         res = subprocess.run(
-            ["libcamera-hello", "--list-cameras"],
+            ["rpicam-hello", "--list-cameras"],
             capture_output=True, text=True, timeout=10
         )
         stdout = res.stdout + res.stderr
         camera_found = "0 :" in stdout or "Available cameras" in stdout
-        record("ircut", "libcamera detects CSI camera", camera_found,
+        record("ircut", "rpicam detects CSI camera", camera_found,
                stdout.strip().splitlines()[0] if stdout.strip() else "no output")
     except FileNotFoundError:
-        record("ircut", "libcamera-hello present", False,
-               "install: sudo apt install libcamera-apps")
+        record("ircut", "rpicam-hello present", False,
+               "install: sudo apt install rpicam-apps")
         camera_found = False
 
     # picamera2 import
