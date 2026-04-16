@@ -416,7 +416,13 @@ The v6.0 PCB routes Lepton J2-P15 to GPIO17, which is exclusively owned by the W
 
 #### mDot 3.3 V supply
 
-The v6.0 PCB connects the mDot VDD to the WittyPi P3-3V3 pin, which is the WittyPi's internal MCU/RTC supply rail — not suitable for powering the mDot.  The mDot should be powered from the Pi's 3.3 V rail (GPIO header pins 1 or 17).  If the mDot is unresponsive on a v6.0 board, check the power supply.
+The mDot must remain powered when the Raspberry Pi is off.  Its role is to receive an inbound LoRa wake command and assert the WittyPi SW line (via Q1) to start the Pi — if the mDot loses power when the Pi shuts down, this wake path is broken.
+
+The v6.0 PCB connects mDot VDD to the WittyPi P3-3V3 pin.  This is the WittyPi's internal MCU/RTC supply rail, which **is** always-on (stays live whenever the battery is connected), making it the correct power domain.  The concern with this rail is current capacity: the mDot draws up to ~127 mA peak during LoRa TX.  The WittyPi's MCU/RTC rail is not intended to supply this.  The fix is to add adequate bulk decoupling at the mDot VDD pin (100 µF electrolytic + 100 nF ceramic) so that TX current spikes are sourced locally from the capacitors rather than drawn from the WittyPi rail.
+
+**The Pi's 3.3 V GPIO rail (pins 1 or 17) must not be used** — it is switched off whenever the Pi is powered down, which breaks the remote wake path entirely.
+
+If the mDot is unresponsive on a v6.0 board, verify the P3-3V3 connection and check that decoupling capacitors are fitted.
 
 #### WittyPi shell utility timeout on slow I2C
 
