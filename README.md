@@ -217,9 +217,36 @@ If `AT → OK` fails: check that `dtoverlay=uart5` is in `/boot/firmware/config.
 | rpicam detects CSI camera | `rpicam-hello --list-cameras` shows camera 0 |
 | picamera2 import | `from picamera2 import Picamera2` succeeds |
 | test capture successful | 640×480 JPEG written to a temp file, file size > 1 KB |
-| GPIO21 IR-CUT filter control | GPIO21 can be set HIGH and LOW without exception |
+| GPIO21 IR-CUT filter drive | GPIO21 can be configured and driven without exception |
 
-The IR-CUT filter is controlled by a wire soldered to the camera board and connected to GPIO21 (BCM), physical pin 40.  `LOW` = normal visible-light photo; `HIGH` = NIR-inclusive photo.  The camera must have been hardware-modified before this test is meaningful — see the SU-WaterCam build guide.
+The IR-CUT filter is controlled by replacing the camera's internal photoresistor (LDR) with a wire to GPIO21 (BCM), physical pin 40.  The camera's onboard IR-CUT controller IC reads this pin as a light-level signal and drives the filter motor itself.  `LOW` presents a low-impedance path to GND (camera sees "bright" → day mode, filter in); `HIGH` allows the node to float up through the camera's internal pull-up (camera sees "dark" → night mode, filter out).
+
+The GPIO drive check in the main harness only confirms the pin can be configured and driven without error.  It does **not** confirm the filter physically moves — the camera's photoresistor divider loads the pin below the Pi's logic-HIGH read-back threshold, so `GPIO.input()` reads 0 in both states even when the circuit is functioning correctly.
+
+**Functional test:** use `test_ircut_filter.py` to confirm the filter actually moves.  See [IR-CUT filter functional test](#ir-cut-filter-functional-test-test_ircut_filterpy) below.
+
+### IR-CUT filter functional test (`test_ircut_filter.py`)
+
+```bash
+sudo python3 test_ircut_filter.py
+sudo python3 test_ircut_filter.py --save-images   # save PNG captures for inspection
+```
+
+This script drives the GPIO through a LOW → HIGH → LOW sequence and compares camera images to confirm the filter physically moves.
+
+**Why a separate script?**  The main harness is designed for fast go/no-go checks on all components.  The IR-CUT filter test requires a multi-second image-comparison sequence that would slow the full suite significantly, and it depends on scene lighting (needs IR-rich light to produce a measurable signal).
+
+**Metric — overall brightness:**  With the camera controls locked (fixed exposure and gain), overall image brightness directly reflects how much light reaches the sensor.  Removing the IR-CUT filter passes near-IR through to the sensor, increasing brightness by 30–50 % in typical indoor lighting — a large, consistent signal.
+
+R/B channel ratio is not used.  On the OV5647 sensor, the blue channel is more IR-sensitive than red, so R/B moves in the wrong direction and by a small amount when IR increases.  R/G ratio (reported as a diagnostic) is more useful if a ratio-based check is needed: green is less IR-sensitive than red, so R/G rises when IR increases.
+
+**Why AWB/AEC are locked before capturing:**  The camera's Auto White Balance and Auto Exposure actively compensate for exactly the colour and brightness change the IR-CUT filter produces.  If AWB is running during the test, it will equalise the channel ratios between captures and can hide the filter movement entirely.  The script waits for AWB/AEC to settle during warm-up, snapshots the current gains and exposure time, then locks those settings before making any GPIO change.  Both captures therefore happen under identical conditions.
+
+**Why the return transition is tested:**  A single HIGH-vs-LOW comparison could produce a false positive if scene lighting changes between the two captures (e.g. a cloud).  After the HIGH capture, the script drives GPIO back to LOW and checks that the R/B ratio returns toward its baseline value.  A real filter movement is symmetric; a lighting change is not.
+
+**Settle time:**  With the camera locked, 0.5 s after a GPIO change is sufficient — it covers the ~300 ms the filter needs to physically move without waiting for AEC to stabilise.
+
+**Lighting:**  The test works best under sunlight or halogen.  Pure LED panels have very little near-IR content; under LED-only lighting the R/B shift may be below the 5 % default threshold even when the filter is moving correctly.  Use `--save-images` for visual confirmation in LED-only environments.
 
 ---
 
@@ -293,7 +320,8 @@ dtoverlay=uart5
 ```
 UFOTestSuite/
 ├── README.md                    ← this file
-└── watercam_hardware_test.py    ← the test harness
+├── watercam_hardware_test.py    ← the test harness
+└── test_ircut_filter.py         ← standalone IR-CUT filter functional test
 ```
 
 Companion repositories (expected at the same level as this repo):
@@ -427,6 +455,26 @@ If the mDot is unresponsive on a v6.0 board, verify the P3-3V3 connection and ch
 #### WittyPi shell utility timeout on slow I2C
 
 If `get_temperature` or other WittyPi utility commands time out (returning `None`), I2C may be running too slow due to clock stretching from the BNO055.  The `i2c_arm_baudrate=10000` overlay slows the bus to accommodate the BNO055 but can cause WittyPi utilities to time out.  The test harness uses a 5 s subprocess timeout; increase it in `run_wittypi()` if needed.
+
+#### IR-CUT GPIO reads LOW in both states (expected behaviour)
+
+The IR-CUT camera's photoresistor divider loads GPIO21 below the Pi's logic-HIGH threshold (~1.6 V) when driven HIGH.  `GPIO.input()` will read 0 in both the HIGH and LOW states even when the circuit is functioning correctly.  The filter still moves — the camera's internal comparator has a lower threshold than the Pi's GPIO input register and does see the voltage swing — but GPIO read-back is not a reliable indicator for this interface.
+
+The main harness `ircut` test therefore only checks that the GPIO can be configured and driven without error; it does not check read-back.  Use `test_ircut_filter.py` for functional confirmation.
+
+If the PCB design is revised, the recommended fix is to replace the direct GPIO wire with an NPN transistor (2N3904 or BSS138) as an open-collector switch.  This presents the high/low impedance the comparator was designed for, regardless of GPIO drive strength.  See `../pcb-designs/WaterCam_PCB_Design_Changes_Required.md` issue #5 for the schematic.
+
+#### AWB masking in IR-CUT image comparison
+
+If `test_ircut_filter.py` is modified to capture without locking AWB/AEC first, it will produce unreliable results.  The camera's Auto White Balance equalises channel ratios over ~1–2 seconds; if captures are taken more than ~1 s after a GPIO change with AWB running, the measured brightness and ratio differences will be significantly smaller than the true filter effect and may fall below the pass threshold even when the filter is moving correctly.
+
+Always lock AWB and AEC (by snapshotting current gains/exposure and calling `set_controls` to disable `AwbEnable` and `AeEnable`) before capturing for comparison.  This is what the current script does.
+
+#### R/B ratio is the wrong metric for the OV5647 sensor
+
+The OV5647 sensor's blue channel is more sensitive to near-IR than red.  When the IR-CUT filter is removed, the blue channel increases *more* than red, causing the R/B ratio to decrease.  The change is small (2–6 %) and inconsistent, and was causing false FAIL results even when the filter was visibly moving.
+
+The correct primary metric with camera controls locked is **overall brightness** — removing the filter increases total sensor light input by 30–50 %, which is a large and consistent signal.  R/G ratio is a useful secondary metric (green is less IR-sensitive than red, so R/G rises with IR); R/B should not be used for pass/fail on this sensor.
 
 #### VOSPI discard packets on first read
 

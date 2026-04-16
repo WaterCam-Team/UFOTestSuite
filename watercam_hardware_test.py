@@ -699,29 +699,26 @@ def test_ircut(verbose: bool):
         except Exception as exc:
             record("ircut", "test capture", False, f"{type(exc).__name__}: {exc}")
 
-    # IR-CUT filter GPIO control
+    # IR-CUT filter GPIO drive check.
+    # The GPIO replaces the camera's photoresistor: the camera's internal
+    # comparator triggers the filter motor when the pin state changes.
+    # The photoresistor divider loads the pin below the Pi's logic-HIGH
+    # threshold, so GPIO.input() readback is not a reliable pass criterion.
+    # This test only confirms the GPIO can be configured and driven without
+    # error.  Use test_ircut_filter.py for functional validation (image
+    # comparison to confirm the filter physically moves).
     try:
         import RPi.GPIO as GPIO
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(IRCUT_GPIO_BCM, GPIO.OUT)
-
-        GPIO.output(IRCUT_GPIO_BCM, GPIO.LOW)
-        time.sleep(0.1)
-        low_val = GPIO.input(IRCUT_GPIO_BCM)
-
         GPIO.output(IRCUT_GPIO_BCM, GPIO.HIGH)
         time.sleep(0.1)
-        high_val = GPIO.input(IRCUT_GPIO_BCM)
-
-        GPIO.output(IRCUT_GPIO_BCM, GPIO.LOW)  # leave filter in NIR-off (normal) state
+        GPIO.output(IRCUT_GPIO_BCM, GPIO.LOW)   # leave filter in day mode
         GPIO.cleanup(IRCUT_GPIO_BCM)
-
-        toggled = (high_val != low_val)
-        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter control", toggled,
-               f"LOW={low_val} HIGH={high_val}")
-
+        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter drive (no error)", True,
+               "functional check: run test_ircut_filter.py")
     except Exception as exc:
-        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter GPIO", False,
+        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter drive", False,
                f"{type(exc).__name__}: {exc}")
 
 
