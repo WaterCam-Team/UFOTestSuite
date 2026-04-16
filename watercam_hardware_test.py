@@ -23,8 +23,7 @@ GPIO allocation (BCM numbering, from PCB design):
   GPIO12/TXD5 - UART5 TX → mDot RX
   GPIO13/RXD5 - UART5 RX ← mDot TX
   GPIO17      - WittyPi SYS_UP (DO NOT DRIVE)
-  GPIO21      - IR-CUT camera filter control (pin 40; current software)
-  GPIO22      - IR-CUT filter A (PCB v6 design)
+  GPIO21      - IR-CUT camera filter control (pin 40)
 
 I2C address map (no conflicts):
   0x08        - WittyPi 4 MCU (unified virtual address; LM75B and RTC
@@ -45,8 +44,7 @@ import time
 import struct
 import argparse
 import subprocess
-import traceback
-from typing import Any, Callable
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Terminal colour helpers
@@ -106,14 +104,6 @@ def warn(msg: str):
 # ---------------------------------------------------------------------------
 # Safe runner – catches all exceptions so one broken test never halts the suite
 # ---------------------------------------------------------------------------
-
-def safe(component: str, name: str, fn: Callable, *args, **kwargs) -> bool:
-    try:
-        result = fn(*args, **kwargs)
-        return result
-    except Exception as exc:
-        return record(component, name, False, f"exception: {type(exc).__name__}: {exc}")
-
 
 # ---------------------------------------------------------------------------
 # 1. System / OS checks
@@ -372,8 +362,6 @@ def test_bno055(verbose: bool):
         accel = sensor.acceleration
         gyro = sensor.gyro
         quat = sensor.quaternion
-        bno_temp = sensor.temperature
-
         record("bno055", "Euler angles readable",
                isinstance(euler, tuple) and len(euler) == 3,
                f"heading={euler[0]:.1f}° roll={euler[1]:.1f}° pitch={euler[2]:.1f}°"
@@ -389,10 +377,23 @@ def test_bno055(verbose: bool):
         record("bno055", "Quaternion readable",
                isinstance(quat, tuple) and len(quat) == 4)
 
-        # Temperature should be in a sane range for an indoor device
+        # Temperature: retry up to 3× – the register occasionally returns a
+        # bogus value (e.g. −99 °C) in the first read after power-on.
+        bno_temp = None
+        for _ in range(3):
+            t = sensor.temperature
+            if isinstance(t, (int, float)) and -20 <= t <= 80:
+                bno_temp = t
+                break
+            time.sleep(0.2)
+        if bno_temp is None:
+            bno_temp = sensor.temperature  # record whatever the sensor returns
         if isinstance(bno_temp, (int, float)):
             ok_t = -20 <= bno_temp <= 80
             record("bno055", "die temperature in range", ok_t, f"{bno_temp} °C")
+        else:
+            record("bno055", "die temperature in range", False,
+                   f"unexpected value: {bno_temp!r}")
 
         # Calibration status
         cal = sensor.calibration_status
@@ -427,18 +428,6 @@ LEPTON_REG_DATA0    = 0x0008
 
 # Lepton commands
 LEPTON_CMD_GET_PART_NUMBER = 0x0800 | 0x001C  # SYS module, Get Part Number
-
-
-def _lepton_i2c_read(bus, addr: int, reg: int, length: int = 2) -> bytes | None:
-    """Read ``length`` bytes from a Lepton CCI I2C register."""
-    try:
-        # Write register address (big-endian 16-bit)
-        bus.write(addr, struct.pack(">H", reg))
-        time.sleep(0.002)
-        data = bus.read(addr, length)
-        return bytes(data)
-    except Exception:
-        return None
 
 
 def test_lepton(verbose: bool):
@@ -563,9 +552,11 @@ def test_lepton(verbose: bool):
 # 7. Multitech mDot LoRa
 # ---------------------------------------------------------------------------
 
-MDOT_PORT    = "/dev/ttyAMA5"
-MDOT_BAUD    = 115200
-MDOT_TIMEOUT = 3.0
+MDOT_PORT          = "/dev/ttyAMA5"
+MDOT_BAUD          = 115200
+MDOT_TIMEOUT       = 3.0
+MDOT_AT_RETRIES    = 5    # retry AT to catch gaps between join-attempt windows
+MDOT_AT_RETRY_WAIT = 3.0  # seconds between retries; join windows are ~6–10 s each
 
 
 def _mdot_cmd(ser, cmd: str, timeout: float = 2.0) -> str:
@@ -601,14 +592,26 @@ def test_mdot(verbose: bool):
 
             record("mdot", f"serial port {MDOT_PORT} opened", True)
 
-            # Basic AT command – should echo OK
-            resp = _mdot_cmd(ser, "AT")
-            ok_at = "OK" in resp
+            # Basic AT command – retry to ride out a network join attempt.
+            # While the mDot is actively transmitting a JoinRequest or waiting
+            # in a receive window, the UART is unresponsive.  During the backoff
+            # interval between retries it will answer normally.
+            ok_at = False
+            resp = ""
+            for attempt in range(1, MDOT_AT_RETRIES + 1):
+                resp = _mdot_cmd(ser, "AT")
+                if "OK" in resp:
+                    ok_at = True
+                    break
+                if attempt < MDOT_AT_RETRIES:
+                    time.sleep(MDOT_AT_RETRY_WAIT)
+
             record("mdot", "AT → OK", ok_at, resp[:80] if verbose else "")
 
             if not ok_at:
                 record("mdot", "mDot responding", False,
-                       "No OK response – check baud rate, UART5 enabled, wiring")
+                       "No OK response after retries – module may be mid-join (expected when "
+                       "out of range); also check baud rate, UART5 overlay, wiring")
                 return
 
             # Firmware version
@@ -647,8 +650,7 @@ def test_mdot(verbose: bool):
 # 8. IR-CUT Camera
 # ---------------------------------------------------------------------------
 
-IRCUT_GPIO_BCM = 21   # BCM GPIO21 = physical pin 40 (current software assignment)
-# PCB v6 design specifies GPIO22 (pin 15) – update IRCUT_GPIO_BCM if PCB is used
+IRCUT_GPIO_BCM = 21   # BCM GPIO21 = physical pin 40
 
 
 def test_ircut(verbose: bool):
@@ -714,7 +716,8 @@ def test_ircut(verbose: bool):
         GPIO.output(IRCUT_GPIO_BCM, GPIO.LOW)  # leave filter in NIR-off (normal) state
         GPIO.cleanup(IRCUT_GPIO_BCM)
 
-        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter control", True,
+        toggled = (high_val != low_val)
+        record("ircut", f"GPIO{IRCUT_GPIO_BCM} IR-CUT filter control", toggled,
                f"LOW={low_val} HIGH={high_val}")
 
     except Exception as exc:

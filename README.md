@@ -41,7 +41,7 @@ scp watercam_hardware_test.py pi@<device-ip>:/home/pi/
 **2. Run all tests.**
 
 ```bash
-sudo python3 /home/pi/UFOTestSuite/watercam_hardware_test.py
+sudo /home/pi/SU-WaterCam/venv/bin/python /home/pi/UFOTestSuite/watercam_hardware_test.py
 ```
 
 Root is required for GPIO and SPI access.  The script will not damage the hardware — it reads sensors, pulses the Lepton reset line briefly (< 200 ms), toggles the IR-CUT filter GPIO, and sends a few read-only AT commands to the mDot.
@@ -54,17 +54,17 @@ At the end of the run you will see a table like:
 ============================================================
   SUMMARY
 ============================================================
-  system       7/7
-  i2c          6/6
+  system       9/9
+  i2c          5/5
   spi          2/2
-  wittypi      5/5
+  wittypi      6/6
   aht20        3/3
-  bno055       6/6
-  lepton       7/7
-  mdot         6/6
+  bno055       7/7
+  lepton       9/9
+  mdot         7/7
   ircut        4/4
 
-  TOTAL: 46 passed, 0 failed
+  TOTAL: 52 passed, 0 failed
 ```
 
 A fully assembled and correctly configured unit should pass every test.  Any `FAIL` line prints the component name, test name, and a short explanation directly below the summary.
@@ -102,7 +102,7 @@ sudo python3 watercam_hardware_test.py --no-color 2>&1 | tee test-$(hostname)-$(
 | device `/dev/i2c-1` | I2C bus 1 device node exists (requires `dtparam=i2c_arm=on`) |
 | device `/dev/spidev0.0` | SPI bus device node exists (requires `dtparam=spi=on`) |
 | device `/dev/ttyAMA5` | UART5 device node exists (requires `dtoverlay=uart5`) |
-| libcamera detects cameras | `libcamera-hello --list-cameras` finds at least one camera |
+| rpicam detects cameras | `rpicam-hello --list-cameras` finds at least one camera |
 
 ### `i2c` — I2C bus scan
 
@@ -110,11 +110,10 @@ Runs `i2cdetect -y 1` and checks that each expected device responds at its docum
 
 | Address | Device |
 |---------|--------|
-| `0x2A` | FLIR Lepton CCI (command/control interface) |
+| `0x08` | WittyPi 4 MCU (unified virtual address; LM75B and RTC are on its internal bus) |
 | `0x28` | Adafruit BNO055 IMU (default address; `0x29` if ADR pin pulled high) |
 | `0x38` | Adafruit AHT20 temperature/humidity |
-| `0x48` | WittyPi 4 on-board LM75B temperature sensor |
-| `0x51` | WittyPi 4 PCF85063A real-time clock |
+| `0x2A` | FLIR Lepton CCI (command/control interface) |
 | `0x50` | HAT EEPROM (optional; reported but not required) |
 
 If an address is missing, the physical connection to that device is broken, the device was not powered up, or the kernel I2C driver is not loaded.
@@ -215,7 +214,7 @@ If `AT → OK` fails: check that `dtoverlay=uart5` is in `/boot/firmware/config.
 
 | Test | Pass condition |
 |------|---------------|
-| libcamera detects CSI camera | `libcamera-hello --list-cameras` shows camera 0 |
+| rpicam detects CSI camera | `rpicam-hello --list-cameras` shows camera 0 |
 | picamera2 import | `from picamera2 import Picamera2` succeeds |
 | test capture successful | 640×480 JPEG written to a temp file, file size > 1 KB |
 | GPIO21 IR-CUT filter control | GPIO21 can be set HIGH and LOW without exception |
@@ -356,19 +355,17 @@ WittyPi4Python/       ← WittyPi 4 Python interface (vendored into SU-WaterCam/
 | 12 / TXD5 | 32 | UART5 TX → mDot RX | Requires `dtoverlay=uart5` |
 | 13 / RXD5 | 33 | UART5 RX ← mDot TX | |
 | 17 | 11 | WittyPi SYS_UP | **Never drive this pin** |
-| 21 | 40 | IR-CUT filter control | Current software (see known issues) |
-| 22 | 15 | IR-CUT filter A | PCB v6 design assignment |
+| 21 | 40 | IR-CUT filter control | |
 
 #### I2C address map
 
 | Address | Device | Notes |
 |---------|--------|-------|
-| 0x2A | FLIR Lepton CCI | Fixed |
+| 0x08 | WittyPi 4 MCU | Unified virtual address; LM75B (0x48) and RTC (0x51) are on its internal bus |
 | 0x28 | BNO055 (default) | 0x29 if ADR pin pulled high |
 | 0x38 | AHT20 | Fixed |
-| 0x48 | WittyPi LM75B temperature | Fixed |
-| 0x50 | HAT EEPROM | Optional; not fitted on v6.0 PCB |
-| 0x51 | WittyPi PCF85063A RTC | Fixed |
+| 0x2A | FLIR Lepton CCI | Fixed |
+| 0x50 | HAT EEPROM | Optional |
 
 No address conflicts exist in the default configuration.
 
@@ -408,12 +405,6 @@ If a test needs root access, note it in a comment; the harness already warns the
 If a hardware dependency is missing (e.g. a device node or a Python package), fail gracefully with a `record(..., False, "explanation")` rather than raising an exception.
 
 ### Known issues and hardware quirks
-
-#### IR-CUT filter GPIO mismatch (GPIO21 vs GPIO22)
-
-The SU-WaterCam runtime software (`tt_take_photos.py`) uses **GPIO21** (physical pin 40, BCM) to control the IR-CUT filter.  The PCB v6 design document assigns this function to **GPIO22** (physical pin 15).
-
-`IRCUT_GPIO_BCM = 21` in the test harness matches the current software.  When the PCB is revised and the runtime updated to GPIO22, change this constant to `22`.
 
 #### PCB v6.0 J2 connector pinout errors
 
