@@ -202,7 +202,7 @@ Communicates over UART5 (`/dev/ttyAMA5`, 115200 8N1) using AT commands.
 |------|---------------|
 | serial port opened | `serial.Serial()` opens without exception |
 | AT → OK | mDot echoes `OK` to the bare `AT` command |
-| AT+VER firmware version | Returns firmware string and `OK` |
+| ATI firmware version | Returns firmware string and `OK` |
 | AT+DI device EUI readable | Returns an 8-byte EUI-64 and `OK` |
 | AT+NJS join status readable | Returns join status (0=not joined, 1=joined) and `OK` |
 | AT+TXP TX power readable | Returns current TX power setting and `OK` |

@@ -615,8 +615,8 @@ def test_mdot(verbose: bool):
                 return
 
             # Firmware version
-            resp = _mdot_cmd(ser, "AT+VER")
-            record("mdot", "AT+VER firmware version", "OK" in resp,
+            resp = _mdot_cmd(ser, "ATI")
+            record("mdot", "ATI firmware version", "OK" in resp,
                    resp.replace("\nOK", "").strip()[:80])
 
             # Device EUI
